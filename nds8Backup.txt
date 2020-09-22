@@ -1,0 +1,87 @@
+-module(nds8).
+-import(index, [index/1]).
+-export([lookup/2, peer/2, peerServer/1, peerUser/2, setup/0]).
+-spec lookup(K, list({K, V})) -> none | {some, V}. 
+
+peer(Index, DB) ->
+spawn(?MODULE, peerUser, [Index, self()]),
+peerServer(DB).
+
+lookup(Id, [DB|DBs]) ->
+io:fwrite("Lookup Initiated ~n"),
+    case DB of 
+        {Id, V} -> {some, V};
+        {Q, V} -> lookup(Id, DBs)
+    end;
+lookup(Id, DB) ->
+io:fwrite("Lookup Finishing ~n"),
+	case DB of 
+        {Id, V} -> {some, V};
+        {Q, V} -> none
+    end.
+
+peerServer(DB) ->
+	io:fwrite("PeerServer Started ~n"), 
+	receive 
+		{add, Id, C} -> peerServer([{Id, C}|DB]);
+		{request, Peer, Id} -> 
+		io:fwrite("PeerServer Requesting ~n"),
+		L = lookup(Id, DB),
+		case L of 
+			{some, V} -> Peer!{found, Id, V}, peerServer(DB);
+			none -> Peer!notfound, peerServer(DB)
+		end,
+		peerServer(DB)
+	end.
+
+peerUser(Index, PeerServer) ->
+	io:fwrite("Peer User Initiated ~n"),
+		Index!{getCatalog, self()},
+		receive
+			{ok, Catalog} -> 
+				peerUserRequestItem(lists:nth(rand:uniform(length(Catalog)), Catalog), PeerServer)
+%				RandomItem = lists:nth(rand:uniform(length(Catalog)), Catalog),
+				
+		end,
+		receive
+			{found,Id,Content} -> 
+				PeerServer!{add,Id,Content}, 
+				Index!{addOwner,Id,self()};
+			notfound -> notfound
+		end,
+	peerUser(Index, PeerServer).
+
+peerUserRequestItem({Id,[Owner]}, Pid) ->
+  case Owner =/= self() of
+    true -> Owner!{request,Pid,Id};
+    false -> self()!notfound
+  end;
+peerUserRequestItem({Id,[Owni | Owns]}, Pid) ->
+  case Owni =/= self() of
+    true -> Owni!{request,Pid,Id};
+    false -> peerUserRequestItem({Id,Owns})
+  end.	
+  
+%peerUserRequestItem({Id, [Owner]}) ->
+%	io:fwrite("Peer User Requesting (1 Item) ~n"),
+%	case Owner == self() of
+%		true -> self()!notfound;
+%		false -> Owner!{request, self(), Id}
+%	end;
+%peerUserRequestItem({Id, [Owner1, Owner2]}) -> 
+%	io:fwrite("Peer User Requesting (More than 1 Item) ~n"),
+%	case Owner1 == self() of
+%		true -> peerUserRequestItem({Id, [Owner2]});
+%		false -> Owner1!{request, self(), Id}
+%	end.
+	
+setup() ->
+	IndexID = spawn(index,index,[[]]),
+    PeerA = spawn(?MODULE,peer,[IndexID, {1000,"A"}]),
+    PeerB = spawn(?MODULE,peer,[IndexID,{1001,"B"}]),
+    PeerC = spawn(?MODULE,peer,[IndexID, {1002,"C"}]),
+    IndexID!{addOwner,1000,peerA},
+    IndexID!{addOwner,1001,peerB},
+    IndexID!{addOwner,1002,peerC}.
+	
+	
